@@ -93,10 +93,10 @@ function Front() {
   };
 
   // ===== CORE LOGIC: PROCESS ACTION (HISTORY + NAVIGATE) =====
-  const processAction = (actionName, path) => {
+  const processAction = (actionName, path, category = "") => {
     if (!user) {
-      showToast("❌ Login required to perform this action!", "error");
-      setShowSignin(true); // Open login modal automatically
+      showToast(" Login required to perform this action!", "error");
+      setShowSignin(true); 
       return;
     }
 
@@ -120,10 +120,10 @@ function Front() {
     showToast(`✅ Redirecting to ${actionName}...`);
     setShowCategoryPopup(false);
     
-    setTimeout(() => {
-       navigate(path);
-    }, 1000);
-  };
+   setTimeout(() => {
+     navigate(path, { state: { category } });  
+  }, 1000);
+};
 
   // ===== DELETE HISTORY LOGIC =====
   const toggleSelect = (id) => {
@@ -157,45 +157,59 @@ function Front() {
   };
 
   // ===== AUTH LOGIC =====
+   const handleSignup = async () => {
+   try {
+    const response = await fetch("http://localhost:5000/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, recoveryEmail })
+    });
 
-  const handleSignup = () => {
-    if (!username || !password || !recoveryEmail) {
-      showToast("❌ All fields are required!", "error"); return;
-    }
-    if (!recoveryEmail.includes("@gmail.com")) {
-      showToast("❌ Recovery email must be valid @gmail.com", "error"); return;
+    const data = await response.json();
+
+    if (!data.success) {
+      showToast(data.message, "error");
+      return;
     }
 
-    const existingUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    
-    if (existingUsers.some(u => u.username === username)) {
-      showToast("❌ Username taken! Try Login.", "error"); return;
-    }
-
-    const newUser = { username, password, recoveryEmail };
-    existingUsers.push(newUser);
-    
-    localStorage.setItem("users", JSON.stringify(existingUsers));
-    showToast("✅ Account Created! Please Login now.");
+    showToast("✅ Account Created! Please Login.");
     setShowSignup(false);
-    setShowSignin(true); 
-  };
+    setShowSignin(true);
 
-  const handleSignin = () => {
-    const existingUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    const foundUser = existingUsers.find(u => u.username === username && u.password === password);
-    
-    if (foundUser) {
-      localStorage.setItem("currentUser", JSON.stringify(foundUser));
-      setUser(foundUser);
-      setShowSignin(false);
-      showToast(`✅ Welcome back, ${foundUser.username}!`);
-    } else {
-      showToast("❌ Invalid Username or Password!", "error");
+  } catch (error) {
+    showToast("Server Error!", "error");
+  }
+};
+
+ const handleSignin = async () => {
+  try {
+    const response = await fetch("http://localhost:5000/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ username, password })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      showToast(data.message, "error");
+      return;
     }
-  };
 
-  const handleLogout = () => {
+    localStorage.setItem("currentUser", JSON.stringify({ username: data.username }));
+    setUser({ username: data.username });
+
+    setShowSignin(false);
+    showToast(`✅ Welcome back, ${data.username}!`);
+
+  } catch (error) {
+    showToast("Server Error!", "error");
+  }
+};
+
+    const handleLogout = () => {
     localStorage.removeItem("currentUser");
     setUser(null);
     setShowMenuPopup(false);
@@ -205,81 +219,160 @@ function Front() {
   };
 
   // ===== NEW: FORGOT PASSWORD LOGIC =====
-  
   // Step 1: Verify Email & Username
-  const handleVerifyRecovery = () => {
-    if(!forgotUsername || !forgotEmail) {
-        showToast("❌ Enter Username and Email", "error"); return;
+  const handleVerifyRecovery = async () => {
+   if (!forgotUsername || !forgotEmail) {
+    showToast("❌ Enter Username and Email", "error");
+    return;
+   }
+   try {
+    const response = await fetch("http://localhost:5000/auth/verify-user", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username: forgotUsername,
+        recoveryEmail: forgotEmail
+      })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      showToast(data.message, "error");
+      return;
     }
 
-    const existingUsers = JSON.parse(localStorage.getItem("users") || "[]");
-    const userToRecover = existingUsers.find(u => u.username === forgotUsername);
+    showToast("✅ Verified! Set new password.");
+    setShowForgot(false);
+    setShowReset(true);
 
-    if (userToRecover && userToRecover.recoveryEmail === forgotEmail) {
-        showToast("✅ Verified! Set new password.");
-        setShowForgot(false);
-        setShowReset(true);
-    } else {
-        showToast("❌ Username or Email does not match!", "error");
-    }
-  };
+  } catch (error) {
+    showToast("Server Error!", "error");
+  }
+};
 
   // Step 2: Update Password
-  const handlePasswordReset = () => {
-      if(!newPass || !confirmPass) {
-          showToast("❌ Enter new password", "error"); return;
-      }
-      if(newPass !== confirmPass) {
-          showToast("❌ Passwords do not match", "error"); return;
-      }
+  const handlePasswordReset = async () => {
+  if (!newPass || !confirmPass) {
+    showToast("❌ Enter new password", "error");
+    return;
+  }
 
-      const existingUsers = JSON.parse(localStorage.getItem("users") || "[]");
-      const userIndex = existingUsers.findIndex(u => u.username === forgotUsername);
+  if (newPass !== confirmPass) {
+    showToast("❌ Passwords do not match", "error");
+    return;
+  }
 
-      if(userIndex !== -1) {
-          // Update Password
-          existingUsers[userIndex].password = newPass;
-          localStorage.setItem("users", JSON.stringify(existingUsers));
-          
-          showToast("✅ Password Changed Successfully! Login now.");
-          
-          // Clear states and close modals
-          setShowReset(false);
-          setShowSignin(true);
-          setForgotUsername(""); setForgotEmail(""); setNewPass(""); setConfirmPass("");
-      } else {
-          showToast("❌ Error updating password", "error");
-      }
-  };
+  try {
+    const response = await fetch("http://localhost:5000/auth/reset-password", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username: forgotUsername,
+        newPassword: newPass
+      })
+    });
 
-  // ======================================
+    const data = await response.json();
 
-  const handleFeedbackSubmit = () => {
-    if (!feedbackName || !feedbackText || rating === 0) {
-        showToast("❌ Fill all fields & give rating!", "error"); return;
+    if (!data.success) {
+      showToast(data.message, "error");
+      return;
     }
-    if (feedbackUsername !== user?.username) {
-      showToast("❌ Username mismatch!", "error"); return;
+
+    showToast("✅ Password Changed Successfully! Login now.");
+
+    setShowReset(false);
+    setShowSignin(true);
+
+    setForgotUsername("");
+    setForgotEmail("");
+    setNewPass("");
+    setConfirmPass("");
+
+  } catch (error) {
+    showToast("Server Error!", "error");
+  }
+};
+
+  // ===========FEEDBACK PROCESS===============
+
+  const handleFeedbackSubmit = async () => {
+  if (!feedbackName || !feedbackText || rating === 0) {
+    showToast("❌ Fill all fields & give rating!", "error"); 
+    return;
+  }
+  if (feedbackUsername !== user?.username) {
+    showToast("❌ Username mismatch!", "error"); 
+    return;
+  }
+
+  try {
+    const response = await fetch("http://localhost:5000/feedback/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: feedbackName,
+        username: feedbackUsername,
+        feedback: feedbackText,
+        rating
+      })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      showToast("❌ " + data.message, "error");
+      return;
     }
+
     showToast("✅ Feedback Sent Successfully!");
     setShowFeedbackPopup(false);
-    setFeedbackName(""); setFeedbackText(""); setRating(0);
-  };
+    setFeedbackName(""); 
+    setFeedbackText(""); 
+    setRating(0);
 
-  const handleProfileUpdate = () => {
-     if(!user) return;
-     const updatedUser = { ...user, ...profileData };
-     const users = JSON.parse(localStorage.getItem("users") || "[]");
-     const userIndex = users.findIndex(u => u.username === user.username);
-     if(userIndex !== -1) {
-         users[userIndex] = updatedUser;
-         localStorage.setItem("users", JSON.stringify(users));
-     }
-     localStorage.setItem("currentUser", JSON.stringify(updatedUser));
-     setUser(updatedUser);
-     showToast("✅ Profile Updated!");
-     setShowProfilePopup(false);
-  };
+  } catch (error) {
+    showToast("Server Error!", "error");
+  }
+};
+
+
+  const handleProfileUpdate = async () => {
+  if (!user) return;
+
+  try {
+    const response = await fetch("http://localhost:5000/profile/update-profile", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username: user.username,
+        name: profileData.name,
+        age: profileData.age,
+        gender: profileData.gender
+      })
+    });
+
+    const data = await response.json();
+
+    if (!data.success) {
+      showToast("Update failed", "error");
+      return;
+    }
+
+    showToast("✅ Profile Updated Successfully!");
+    setShowProfilePopup(false);
+
+  } catch (error) {
+    showToast("Server Error!", "error");
+  }
+};
 
   return (
     <div className="front-container">
@@ -383,10 +476,10 @@ function Front() {
              <h3>Analyze: {selectedCategory}</h3>
              <p style={{marginBottom: '15px'}}>Choose a method to check ingredients:</p>
              <div className="hero-options" style={{flexDirection: 'column', gap: '10px'}}>
-                 <div className="opt-box" style={{width: '100%'}} onClick={() => processAction(`${selectedCategory} - Scan`, "/scan")}>📷 Scan Image</div>
-                 <div className="opt-box" style={{width: '100%'}} onClick={() => processAction(`${selectedCategory} - Upload`, "/upload")}>📁 Upload Image</div>
-                 <div className="opt-box" style={{width: '100%'}} onClick={() => processAction(`${selectedCategory} - Type`, "/type")}>⌨️ Type Text</div>
-             </div>
+                 <div className="opt-box" onClick={() => processAction(`${selectedCategory} - Scan`, "/scan", selectedCategory)}>📷 Scan Image</div>
+                 <div className="opt-box" onClick={() => processAction(`${selectedCategory} - Upload`, "/upload", selectedCategory)}>📁 Upload Image</div>
+                 <div className="opt-box" onClick={() => processAction(`${selectedCategory} - Type`, "/type", selectedCategory)}>⌨️ Type Text</div>
+                </div>
              <button className="cancel-btn" style={{marginTop: '15px'}} onClick={() => setShowCategoryPopup(false)}>Close</button>
            </div>
         </div>
@@ -440,8 +533,7 @@ function Front() {
               <p className="menu-item" onClick={() => { if(user) {setShowProfilePopup(true); setShowMenuPopup(false)} else showToast("Login First!", "error")}}>👤 Profile</p>
               <p className="menu-item" onClick={() => { setShowHistoryPopup(true); setShowMenuPopup(false)}}>📜 History</p>
               <p className="menu-item" onClick={() => { if(user) {setShowFeedbackPopup(true); setShowMenuPopup(false); setFeedbackUsername(user.username)} else showToast("Login First!", "error")}}>💬 Feedback</p>
-              
-              {user && <button className="logout-btn" onClick={handleLogout}>Logout</button>}
+               {user && <button className="logout-btn" onClick={handleLogout}>Logout</button>}
             </div>
           </div>
         </div>

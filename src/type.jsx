@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import "./App.css";
 import ProfileImg from "./assets/profile.png";
+import { useLocation } from "react-router-dom";
+import "./App.css";
 
 function Type() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const category = location.state?.category || "Global"; // Default global
 
+  console.log("Selected category:", category);
   // Syncing with 'currentUser'
   const [user, setUser] = useState(() => {
     const savedUser = localStorage.getItem("currentUser");
@@ -27,67 +31,107 @@ function Type() {
 
   /* ================= SPEECH RECOGNITION LOGIC ================= */
   const handleVoiceInput = () => {
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
-    if (!SpeechRecognition) {
-      showToast("Browser doesn't support Voice!", "error");
-      return;
-    }
-
-    const recognition = new SpeechRecognition();
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    showToast("Browser doesn't support Voice!", "error");
+    return;
+  }
+   const recognition = new SpeechRecognition();
     recognition.lang = "en-US";
-    recognition.interimResults = false;
+     recognition.interimResults = false;
+       recognition.maxAlternatives = 1; // ✅ safest alternative
+        recognition.onstart = () => {
+        setIsListening(true);
+        showToast("Listening... Speak now", "success");
+      };
 
-    recognition.onstart = () => {
-      setIsListening(true);
-      showToast("Listening... Speak now", "success");
-    };
+      recognition.onresult = (event) => {
+       if (event.results && event.results[0] && event.results[0][0]) {
+        let transcript = event.results[0][0].transcript || "";
 
-    recognition.onresult = (event) => {
-      const transcript = event.results[0][0].transcript;
-      setIngredientsText(transcript);
-      setIsListening(false);
+       // Replace "and" with comma
+        transcript = transcript.replace(/\band\b/gi, ",");
+      setIngredientsText(transcript.trim());
       showToast("Voice Captured!", "success");
-    };
-
-    recognition.onerror = () => {
-      setIsListening(false);
-      showToast("Speech Error. Try again!", "error");
-    };
-
-    recognition.onend = () => {
-        setIsListening(false);
-    };
-
-    recognition.start();
+    } else {
+      showToast("No speech detected!", "error");
+    }
+    setIsListening(false);
   };
+   
+  recognition.onerror = (e) => {
+    console.error("Speech Recognition Error:", e.error);
+    setIsListening(false);
+    showToast("Speech Error. Try again!", "error");
+  };
+
+  recognition.onend = () => {
+    setIsListening(false);
+  };
+
+  try {
+    recognition.start();
+  } catch (err) {
+    console.error("Recognition start failed:", err);
+    showToast("Voice recognition failed to start!", "error");
+  }
+};
 
   /* ================= VALIDATION LOGIC ================= */
   const handleInputChange = (e) => {
-    const value = e.target.value;
-    setIngredientsText(value);
+  let value = e.target.value;
 
-    const forbiddenPattern = /(hello|good|bad|weather|price|buy|shop)/i;
-    if (forbiddenPattern.test(value)) {
-      setError("❌ Please type ingredient names only!");
-    } else {
-      setError("");
-    }
-  };
+  // Allow only letters, comma, space, %, brackets
+  const allowedPattern = /^[a-zA-Z0-9,%()\- ]*$/;
+
+  if (!allowedPattern.test(value)) {
+    setError("❌ Only ingredient names allowed!");
+  } else {
+    setError("");
+  }
+
+  setIngredientsText(value);
+};
+
 
   /* ================= ANALYSIS LOGIC ================= */
-  const handleAnalysis = () => {
-    if (!ingredientsText.trim() || error) return;
+  
+    const handleAnalysis = async () => {
+  if (!ingredientsText.trim() || error) return;
 
-    setAnalysisResult({
-      name: ingredientsText,
-      causes: "High intake leads to hypertension, kidney strain, and bloating.",
-      level: "Risk", 
-      prevention: "Switch to Himalayan pink salt and reduce processed food intake.",
-      affectedOrgans: ["Kidneys", "Heart", "Blood Vessels"]
+  // Split by comma
+  const ingredientArray = ingredientsText
+    .split(",")
+    .map(i => i.trim())
+    .filter(i => i.length > 0);
+
+  if (ingredientArray.length > 15) {
+    showToast("❌ Maximum 15 ingredients only allowed!", "error");
+    return;
+  }
+
+  try {
+    const response = await fetch("http://localhost:5000/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ingredientsText: ingredientArray.join(", "),
+        username: user?.username,
+        category: category 
+      })
     });
-    showToast("Analysis Complete!", "success");
-  };
+
+    const data = await response.json();
+    if (data.success) {
+      setAnalysisResult(data.data);
+      showToast("Analysis Complete!", "success");
+    } else {
+      showToast("Analysis Failed!", "error");
+    }
+  } catch (err) {
+    showToast("Server Error!", "error");
+  }
+};
 
   const handleLogout = () => {
     localStorage.removeItem("currentUser");
@@ -129,7 +173,6 @@ function Type() {
       )}
 
       <h3 className="center-title">MANUAL ENTRY</h3>
-
       <div className="type-section">
         <div className="ingredient-card">
           <div className="card-header-flex">
@@ -162,40 +205,55 @@ function Type() {
       </div>
 
       {/* ===== ANALYSIS RESULT MODAL ===== */}
-      {analysisResult && (
-        <div className="modal-overlay">
-          <div className="modal-content wide-box">
-            <div className="modal-header">
-                <h3>Analysis Report</h3>
-                <span className="close-x" onClick={() => setAnalysisResult(null)}>✖</span>
-            </div>
-            
-            <div className={`level-badge ${analysisResult.level.toLowerCase()}`}>
-              {analysisResult.level} Risk Level
-            </div>
+     {analysisResult && analysisResult.length > 0 && (
+       <div className="modal-overlay">
+       <div className="modal-content wide-box">
+      <div className="modal-header">
+        <h3>Analysis Report</h3>
+        <span className="close-x" onClick={() => setAnalysisResult(null)}>✖</span>
+      </div>
 
-            <div className="result-details-box">
-              <p><strong>Input:</strong> {analysisResult.name}</p>
-              <p><strong>Health Risk:</strong> {analysisResult.causes}</p>
-              <p><strong>Prevention:</strong> {analysisResult.prevention}</p>
-            </div>
-
-            <hr className="divider" />
-            
-            <h4>Affected Organs Visualization</h4>
-            
-            
-            <div className="organ-tags-container">
-              {analysisResult.affectedOrgans.map(organ => (
-                <span key={organ} className="organ-tag red">⚠️ {organ}</span>
-              ))}
-            </div>
-            
-            <button className="main-btn" style={{marginTop: "20px"}} onClick={() => setAnalysisResult(null)}>Done</button>
+        {analysisResult.map((item, index) => (
+        <div key={index} className="result-card">
+        <div className={`level-badge ${item.riskLevel.toLowerCase()}`}>
+        {item.riskLevel} Risk Level
           </div>
+
+          <div className="result-details-box">
+            <p><strong>Ingredient:</strong> {item.ingredientName}</p>
+            <p><strong>Health Risk:</strong> {item.causes}</p>
+            <p><strong>Prevention:</strong> {item.prevention}</p>
+          </div>
+
+          <hr className="divider" />
+
+          <h4>Affected Organs</h4>
+
+          <div className="organ-tags-container">
+            {item.affectedOrgans && item.affectedOrgans.length > 0 ? (
+              item.affectedOrgans.map((organ, i) => (
+                <span key={i} className="organ-tag red">⚠️ {organ}</span>
+              ))
+            ) : (
+              <span className="organ-tag">No Data</span>
+            )}
+          </div>
+
+          <hr />
         </div>
-      )}
+      ))}
+
+      <button
+        className="main-btn"
+        style={{ marginTop: "20px" }}
+        onClick={() => setAnalysisResult(null)}
+      >
+        Done
+      </button>
     </div>
+  </div>
+)}
+ </div>
   );
 }
 

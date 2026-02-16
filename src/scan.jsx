@@ -41,43 +41,119 @@ function Scan() {
     }
   };
 
-  const captureAndExtract = () => {
-    setIsExtracting(true);
-    
-    // Simulating AI Text Extraction (OCR)
-    setTimeout(() => {
-      const mockIngredients = "Sodium Nitrite, High Fructose Corn Syrup, Artificial Colors, MSG";
-      setIngredientsText(mockIngredients);
-      setIsExtracting(false);
-      showToast("Ingredients Extracted!", "success");
-      
-      // Stop Camera Stream
-      if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject;
-        stream.getTracks().forEach(track => track.stop());
+  const captureAndExtract = async () => {
+  if (!videoRef.current) return;
+
+  setIsExtracting(true);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = videoRef.current.videoWidth;
+  canvas.height = videoRef.current.videoHeight;
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(videoRef.current, 0, 0);
+
+  const imageData = canvas.toDataURL("image/png");
+
+  try {
+    const { data: { text } } = await Tesseract.recognize(imageData, "eng");
+
+    let normalized = text
+      .replace(/\r/g, " ")
+      .replace(/\n+/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    // Flexible Ingredients detection
+    const match = normalized.match(/ingred[a-z]*\s*[:\-]?/i);
+
+    let ingText = match
+      ? normalized.substring(
+          normalized.toLowerCase().indexOf(match[0].toLowerCase()) + match[0].length
+        )
+      : normalized;
+
+    // Stop at unwanted sections
+    const stopWords = [
+      "manufactured",
+      "marketed",
+      "expiry",
+      "fssai",
+      "net weight",
+      "mrp",
+      "batch"
+    ];
+
+    for (let word of stopWords) {
+      const stopIndex = ingText.toLowerCase().indexOf(word);
+      if (stopIndex !== -1) {
+        ingText = ingText.substring(0, stopIndex);
+        break;
       }
-      setIsCameraOpen(false);
-    }, 2000); 
-  };
+    }
+
+    // Clean but keep brackets
+    ingText = ingText
+      .replace(/[^a-zA-Z0-9,%()\- ]/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    let ingredientList = ingText
+      .split(",")
+      .map(i => i.trim())
+      .filter(i => i.length > 1)
+      .slice(0, 8); // limit 8
+
+    const finalText = ingredientList.join(", ");
+
+    setIngredientsText(finalText);
+
+    showToast("✅ Ingredients Extracted!");
+
+    // Stop camera
+    const stream = videoRef.current.srcObject;
+    stream.getTracks().forEach(track => track.stop());
+    setIsCameraOpen(false);
+
+  } catch (err) {
+    showToast("❌ OCR failed!", "error");
+  }
+
+  setIsExtracting(false);
+};
+
 
   /* ================= ANALYSIS LOGIC ================= */
-  const handleAnalysis = () => {
-    if (!ingredientsText) return;
-    setAnalysisResult({
-      name: "Sodium Nitrite & MSG",
-      causes: "Increased risk of type 2 diabetes and nervous system sensitivity.",
-      level: "Risk", 
-      prevention: "Avoid highly processed snacks and choose fresh alternatives.",
-      affectedOrgans: ["Heart", "Stomach", "Brain"]
+  const handleAnalysis = async () => {
+  if (!ingredientsText) return showToast("No ingredients detected!");
+  if (!user) return showToast("Login required!");
+
+  try {
+    const response = await fetch("http://localhost:5000/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ingredientsText,
+        username: user.username
+      })
     });
-  };
 
-  const handleLogout = () => {
-    localStorage.removeItem("currentUser");
-    navigate("/");
-  };
+    const result = await response.json();
+    if (!result.success)
+      return showToast("No data found!", "error");
+      setAnalysisResult(result.data);
+} catch {
+    showToast("Server error!", "error");
+  }
+};
 
-  return (
+const handleLogout = () => {
+  localStorage.removeItem("currentUser");
+  navigate("/"); // Login or start page
+  showToast("Successfully Logged Out!", "success");
+};
+
+return (
     <div className="analysis-container">
       {toast.show && <div className={`toast-message ${toast.type}`}>{toast.msg}</div>}
 
@@ -101,17 +177,32 @@ function Scan() {
                 <span className="close-x" onClick={() => setShowMenu(false)}>✖</span>
              </div>
              <div className="menu-options-list">
-                <p className="menu-item" onClick={() => navigate("/front")}>🏠 Home</p>
+                <p 
+            className="menu-item" 
+            onClick={() => { 
+              navigate("/front"); 
+              setShowMenu(false); // Overlay close
+            }}
+          >
+            🏠 Home
+          </p>
                 <hr className="menu-hr" />
-                <p className="menu-item logout-btn-text" onClick={handleLogout}>🚪 Logout</p>
+               <p 
+            className="menu-item logout-btn-text" 
+            onClick={() => {
+              handleLogout();
+              setShowMenu(false); // Overlay close
+            }}
+          >
+            🚪 Logout
+          </p>
              </div>
           </div>
         </div>
       )}
 
       <h3 className="center-title">SCAN PRODUCT LABEL</h3>
-
-      <div className="scan-section">
+     <div className="scan-section">
         {!isCameraOpen ? (
           <div className="camera-trigger-card" onClick={startCamera}>
             <div className="camera-circle">📷</div>
@@ -131,7 +222,7 @@ function Scan() {
         )}
 
         {/* ===== INGREDIENT BOX (LOCKED) ===== */}
-        <div className="ingredient-box-card">
+      <div className="ingredient-box-card">
           <h4>Detected Ingredients</h4>
           <textarea 
             value={ingredientsText} 
@@ -149,44 +240,50 @@ function Scan() {
         </div>
       </div>
 
+  
       {/* ===== ANALYSIS RESULT MODAL ===== */}
       {analysisResult && (
         <div className="modal-overlay">
-          <div className="modal-content wide-box">
-            <div className="modal-header">
-                <h3>Analysis Report</h3>
-                <span className="close-x" onClick={() => setAnalysisResult(null)}>✖</span>
-            </div>
-            
-            <div className={`level-badge ${analysisResult.level.toLowerCase()}`}>
-              {analysisResult.level} Level
-            </div>
-
-            <div className="result-details">
-              <p><strong>Detected:</strong> {analysisResult.name}</p>
-              <p><strong>Health Risk:</strong> {analysisResult.causes}</p>
-              <p><strong>Prevention:</strong> {analysisResult.prevention}</p>
-            </div>
-
-            <hr className="divider" />
-            
-            <h4>Affected Organs</h4>
-            
-
-[Image of the human digestive system]
-
-            <div className="organ-tags-container">
-                {analysisResult.affectedOrgans.map(organ => (
-                  <span key={organ} className="organ-tag red">⚠️ {organ}</span>
-                ))}
-            </div>
-            
-            <button className="main-btn" style={{marginTop: '20px'}} onClick={() => setAnalysisResult(null)}>Done</button>
-          </div>
+        <div className="modal-content wide-box">
+        <div className="modal-header">
+        <h3>Analysis Report</h3>
+        <span className="close-x" onClick={() => setAnalysisResult(null)}>✖</span>
         </div>
-      )}
+
+      {analysisResult.map((item, index) => (
+        <div key={index} className="result-details-box">
+
+          <div className={`level-badge ${item.riskLevel?.toLowerCase()}`}>
+            {item.riskLevel} Risk
+          </div>
+
+          <p><strong>Ingredient:</strong> {item.ingredientName}</p>
+          <p><strong>Health Risk:</strong> {item.causes}</p>
+          <p><strong>Prevention:</strong> {item.prevention}</p>
+
+          <h4>Affected Organs</h4>
+          <div className="organ-tags-container">
+            {item.affectedOrgans?.map((organ, i) => (
+              <span key={i} className="organ-tag red">
+                ⚠️ {organ}
+              </span>
+            ))}
+          </div>
+         <hr className="divider" />
+        </div>
+      ))}
+
+      <button
+        className="main-btn"
+        style={{ marginTop: "20px" }}
+        onClick={() => setAnalysisResult(null)}
+      >
+        Done
+      </button>
     </div>
+  </div>
+)}
+ </div>
   );
 }
-
 export default Scan;

@@ -2,16 +2,21 @@ import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import "./App.css";
 import ProfileImg from "./assets/profile.png";
+import Tesseract from "tesseract.js";
+import { useLocation } from "react-router-dom";
 
 function Upload() {
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
-  
-  const [user] = useState(() => {
+  const location = useLocation();
+  const category = location.state?.category || "Global"; // Default global
+
+    console.log("Selected category:", category);
+    const [user] = useState(() => {
     const savedUser = localStorage.getItem("currentUser");
     return savedUser ? JSON.parse(savedUser) : null;
   });
-
+ 
   /* ================= UI STATES ================= */
   const [showMenu, setShowMenu] = useState(false);
   const [selectedImage, setSelectedImage] = useState(null);
@@ -30,35 +35,132 @@ function Upload() {
     fileInputRef.current.click();
   };
 
-  const handleFileChange = (event) => {
-    const file = event.target.files[0];
-    if (file) {
-      setSelectedImage(URL.createObjectURL(file));
-      setIngredientsText(""); // Reset previous text
-      setIsScanning(true); 
-      showToast("Uploading & Scanning...", "success");
-      
-      // Simulating AI Extraction
-      setTimeout(() => {
-        const extracted = "Palm Oil, MSG (Monosodium Glutamate), Tartrazine";
-        setIngredientsText(extracted);
-        setIsScanning(false);
-        showToast("Ingredients Extracted!", "success");
-      }, 2000);
+const handleFileChange = (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  setSelectedImage(URL.createObjectURL(file));
+  setIngredientsText("");
+  setIsScanning(true);
+  showToast("Scanning image...", "success");
+  Tesseract.recognize(file, "eng")
+  .then(({ data: { text } }) => {
+
+    let normalized = text
+      .replace(/\r/g, " ")
+      .replace(/\n+/g, " ")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    let ingText = "";
+
+    //  Flexible detection (handles OCR mistakes)
+    const match = normalized.match(/ingred[a-z]*\s*[:\-]?/i);
+
+    if (match) {
+      const index = normalized.toLowerCase().indexOf(match[0].toLowerCase());
+      ingText = normalized.substring(index + match[0].length);
+    } else {
+      //  Fallback: assume whole text might be ingredients block
+      ingText = normalized;
     }
-  };
+
+    // Stop at unwanted sections
+    const stopWords = [
+      "manufactured",
+      "marketed",
+      "best before",
+      "expiry",
+      "fssai",
+      "net weight",
+      "mrp",
+      "packed",
+      "batch",
+      "customer care"
+    ];
+
+    for (let word of stopWords) {
+      const stopIndex = ingText.toLowerCase().indexOf(word);
+      if (stopIndex !== -1) {
+        ingText = ingText.substring(0, stopIndex);
+        break;
+      }
+    }
+
+    //  Clean but keep brackets and %
+    ingText = ingText
+      .replace(/[^a-zA-Z0-9,%()\- ]/g, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+
+    //  Split ingredients
+    let ingredientList = ingText
+      .split(",")
+      .map(i => i.trim())
+      .filter(i => i.length > 1);
+
+    //  If comma not detected properly → split by space pattern
+    if (ingredientList.length <= 1) {
+      ingredientList = ingText
+        .split(/(?=[A-Z])/)
+        .map(i => i.trim())
+        .filter(i => i.length > 2);
+    }
+
+    //  Limit to 8
+    ingredientList = ingredientList.slice(0, 15);
+
+    const finalText = ingredientList.join(", ");
+
+    if (!finalText) {
+      showToast(" Unable to detect ingredients!", "error");
+      setIsScanning(false);
+      return;
+    }
+
+    setIngredientsText(finalText);
+    setIsScanning(false);
+    showToast("✅ Ingredients extracted!");
+  })
+  .catch(() => {
+    setIsScanning(false);
+    showToast(" OCR failed!", "error");
+  });
+
+
+};
 
   /* ================= ANALYSIS LOGIC ================= */
-  const handleAnalysis = () => {
-    if (!ingredientsText) return;
-    setAnalysisResult({
-      name: "MSG & Tartrazine",
-      causes: "May cause headaches, allergic reactions, and hyperactivity in children.",
-      level: "Moderate", 
-      prevention: "Look for MSG-free labels and avoid artificial food dyes.",
-      affectedOrgans: ["Brain", "Skin", "Nervous System"]
+  
+  const handleAnalysis = async () => {
+  if (!ingredientsText) return showToast("❌ No ingredients detected!", "error");
+  if (!user) return showToast("❌ Login first!", "error");
+
+  try {
+    setIsScanning(true);
+    const response = await fetch("http://localhost:5000/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ingredientsText, // ✅ fixed
+        username: user?.username,
+        category
+      })
     });
-  };
+    const result = await response.json();
+    setIsScanning(false);
+
+    if (!result.success || !result.data.length)
+      return showToast("❌ No analysis found!", "error");
+
+    setAnalysisResult(result.data);
+    showToast("✅ Analysis Complete!");
+  } catch (err) {
+    setIsScanning(false);
+    console.error("Server Error:", err);
+    showToast("Server Error!", "error");
+  }
+};
 
   const handleLogout = () => {
     localStorage.removeItem("currentUser");
@@ -125,14 +227,13 @@ function Upload() {
           <h4>Extracted Ingredients</h4>
           <textarea 
             value={isScanning ? "Scanning in progress..." : ingredientsText} 
-            readOnly // Condition 1: Manual typing blocked
+            readOnly 
             placeholder="Text will appear after upload..."
             className="locked-textarea"
           />
           <button 
             className="main-btn" 
-            disabled={!ingredientsText.trim() || isScanning} // Condition 2: Text iruntha thaan work aagum
-            onClick={handleAnalysis}
+            disabled={!ingredientsText.trim() || isScanning} 
           >
             Start Analysis
           </button>
@@ -141,42 +242,56 @@ function Upload() {
 
       {/* ===== ANALYSIS RESULT MODAL ===== */}
       {analysisResult && (
-        <div className="modal-overlay">
-          <div className="modal-content wide-box">
-            <div className="modal-header">
-                <h3>Analysis Report</h3>
-                <span className="close-x" onClick={() => setAnalysisResult(null)}>✖</span>
-            </div>
+       <div className="modal-overlay">
+       <div className="modal-content wide-box">
+       <div className="modal-header">
+        <h3>Analysis Report</h3>
+        <span className="close-x" onClick={() => setAnalysisResult(null)}>✖</span>
+      </div>
 
-            <div className={`level-badge ${analysisResult.level.toLowerCase()}`}>
-              {analysisResult.level} Risk Level
-            </div>
-
-            <div className="result-details-box">
-              <p><strong>Ingredients:</strong> {analysisResult.name}</p>
-              <p><strong>Health Risks:</strong> {analysisResult.causes}</p>
-              <p><strong>Prevention:</strong> {analysisResult.prevention}</p>
-            </div>
-
-            <hr className="divider" />
-            
-            <h4>Affected Organs</h4>
-            
-
-[Image of the nervous system and brain]
-
-
-            <div className="organ-tags-container">
-                {analysisResult.affectedOrgans.map(organ => (
-                  <span key={organ} className="organ-tag orange">⚠️ {organ}</span>
-                ))}
-            </div>
-            
-            <button className="main-btn" style={{marginTop: '20px'}} onClick={() => setAnalysisResult(null)}>Done</button>
+      {analysisResult.map((item, index) => (
+        <div key={index}>
+          <div className={`level-badge ${item.riskLevel?.toLowerCase()}`}>
+            {item.riskLevel} Risk Level
           </div>
+
+          <div className="result-details-box">
+            <p><strong>Ingredient:</strong> {item.ingredientName}</p>
+            <p><strong>Health Risk:</strong> {item.causes}</p>
+            <p><strong>Prevention:</strong> {item.prevention}</p>
+          </div>
+
+          <hr className="divider" />
+
+          <h4>Affected Organs</h4>
+
+          <div className="organ-tags-container">
+            {item.affectedOrgans?.length > 0 ? (
+              item.affectedOrgans.map((organ, i) => (
+                <span key={i} className="organ-tag red">
+                  ⚠️ {organ}
+                </span>
+              ))
+            ) : (
+              <p>No organs affected</p>
+            )}
+          </div>
+
+          <hr style={{marginTop: "20px"}} />
         </div>
-      )}
+      ))}
+
+      <button 
+        className="main-btn" 
+        style={{marginTop: "20px"}} 
+        onClick={() => setAnalysisResult(null)}
+      >
+        Done
+      </button>
     </div>
+  </div>
+)}
+ </div>
   );
 }
 
