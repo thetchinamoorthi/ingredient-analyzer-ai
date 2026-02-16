@@ -144,7 +144,7 @@ const handleFileChange = (event) => {
       body: JSON.stringify({
         ingredientsText, // ✅ fixed
         username: user?.username,
-        category
+        category:category
       })
     });
     const result = await response.json();
@@ -234,9 +234,11 @@ const handleFileChange = (event) => {
           <button 
             className="main-btn" 
             disabled={!ingredientsText.trim() || isScanning} 
-          >
-            Start Analysis
-          </button>
+            onClick={handleAnalysis} // ← idha add pannanum
+              >
+             Start Analysis
+            </button>
+
         </div>
       </div>
 
